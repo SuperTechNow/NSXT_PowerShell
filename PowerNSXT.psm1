@@ -284,4 +284,235 @@ Function Verify-Port {
 }
 
 
+Function Split-NSXTPorts{
+    <#
+    .SYNOPSIS
+     NSX
+    
+    .DESCRIPTION
+    Long description
+    
+    .PARAMETER InputArray
+    Parameter description
+    
+    .PARAMETER SubArraySize
+    Parameter description
+    
+    .EXAMPLE
+    An example
+    
+    .NOTES
+    General notes
+    #>
+
+    param(# Service port array
+    [Parameter(ValueFromPipeline = $true, Position = 0, Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [ValidateScript( {$_ -is [array] })]
+    [array[]]$InputArray,
+    # Define the size of sub array
+    [Parameter(ValueFromPipelineByPropertyName = $true, position = 1, Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [ValidateScript( {$_ -is [int] })]
+    [int]$SubArraySize
+    )
+
+    $outputArray = @()
+    $port_count = 0
+    $array = @()
+
+    ## NSX-T port range counts as 2 values in service entity
+    ## Each service entity should not exceed value of 15
+    ## Loop through ports and make a list of sub array with defined size or defined size -1 
+    foreach ($port in $InputArray) {
+
+        ## If it's a port range, check variable $port_count,
+        ##  a. if it's less or equal to $SubArraySize-2, add the range to $array and increase $port_count by 2
+        ##  b. if it's $SubArraySize-1 or $SubArraySize, add $array to $outputArray as an individual array, reset $array and then add $port to it, reset $port_count to 2
+        if($port -like "*-*"){
+            if($port_count -le $SubArraySize-2) {
+                $array += $port
+                $port_count +=2
+            }
+            else{
+                $outputArray += ,$array
+                $array = @()
+                $array += $port
+                $port_count =2
+            }
+        }
+        ## If it's a port, check variable $port_count,
+        ##  a. if it's less or equal to $SubArraySize-1, add the range to $array and increase $port_count by 1
+        ##  b. if it's $SubArraySize, add $array to $outputArray as an individual array, reset $array and then add $port to it, reset $port_count to 1
+        else{
+            if($port_count -le $SubArraySize-1){
+                $array +=$port
+                $port_count +=1
+            }
+            else{
+                $outputArray += ,$array
+                $array = @()
+                $array += $port
+                $port_count = 1
+            }
+        }
+    }
+
+    ## At the end of loop, there's a last array with rest of ports which do not make a full 14/15 list
+    $outputArray += ,$array
+
+    return $outputArray
+}
+
+
+Function Get-NSXTPortCount {
+    param(# Service port array
+    [Parameter(ValueFromPipeline = $true, Position = 0, Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [ValidateScript( {$_ -is [array] })]
+    [array[]]$InputArray
+
+    $port_count = 0
+    foreach ($port in $InputArray){
+        if ($port -like "*-*"){
+            $port_count +=2
+        }
+        else{
+            $port_count +=1
+        }
+    }
+    return $port_count
+}
+
+
+Function Verify-NSXTFirewallRuleInputData {
+    param(
+        # Parameter help description
+        [Parameter(ValueFromPipeline = $true, Mandatory = $true, HelpMessage = "NSXT Firewall Rule Input Data")]
+        [ValidateNotNullorEmpty()]
+        [string[]]$InputFWRule,
+        # Parameter help description
+        [Parameter(ValueFromPipelineByPropertyName = $true, Mandatory = $true, HelpMessage = "NSXT Firewall Rule Input Property")]
+        [ValidateNotNullorEmpty()]
+        $Property
+    )
+
+    ## Get Header name
+    $Name = $Property.n
+    ## Index and rule count
+    $fw_i = 0
+    $fw_count = $InputFWRule.Count
+    $_fwRules = @()
+    $dataAllOK = $true
+
+    Write-Host "`nStart checking FW rule data" -ForegroundColor Yellow
+    start-sleep 1
+
+    foreach ($fwrule in $InputFWRule) {
+
+        $fw_i++
+        "{0,-70} {1,20}" -f "`tVerifying FW rule: $($fwrule.$($Name[0]))", "# $fw_i out of $fw_count" | out-string | write-host 
+        $RuleNameOK = $true
+        $RuleSrcIPOK = $true
+        $RuleDstIPOK = $true
+        $RulePortsOK = $true
+
+        ## Check whether fw name contains special characetors aka nay charactor besides a-z, A-Z, 0-9, "-", "_", and " "
+        if ($fwrule.$($Name[0]) -match "[^a-zA-Z0-9-_ ]"){
+            Write-host "`t`t Rule Name, $($fwrule.$($Name[0])), contains special charactor(s)" -ForegroundColor Red
+            $RuleNameOK = $false
+            Start-Sleep 1
+        }
+        else{
+            Write-Host "`t`t Rule Name, $($fwrule.$($Name[0])), is OK without special charactor" -ForegroundColor Green
+        }
+
+        ## check source IP addresses
+        $sourceIPs = @()
+        $sourceIPs += $( $fwrule.$($Name[1]) -replace " ", "" ) -split ";" | where { -not [string]::IsNullOrWhiteSpace($_) }
+        $fwrule.$($Name[1]) = $sourceIPs
+        foreach ($ip in $sourceIPs){
+            if ( !(Verify-IP($ip)) ){
+                $RuleSrcIPOK = $false
+                Write-Host "`t`t Source IP not correct: $ip" -ForegroundColor red
+                start-sleep 1
+            }
+        }
+
+        if($RuleSrcIPOK){
+            Write-Host "`t`t Rule Source IPs are ALL OK!" -ForegroundColor Green
+        }
+
+        ## check destination IP addresses
+        $destIPs = @()
+        $destIPs += $( $fwrule.$($Name[2]) -replace " ", "" ) -split ";" | where { -not [string]::IsNullOrWhiteSpace($_) }
+        $fwrule.$($Name[2]) = $destIPs
+        foreach ($ip in $destIPs){
+            if ( !(Verify-IP($ip)) ){
+                $RuleDstIPOK = $false
+                Write-Host "`t`t Destination IP not correct: $ip" -ForegroundColor red
+                start-sleep 1
+            }
+        }
+
+        if($RuleDstIPOK){
+            Write-Host "`t`t Rule Destination IPs are ALL OK!" -ForegroundColor Green
+        }
+
+        ## check rule service ports
+        $Ports = @()
+        $Ports += $( $fwrule.$($Name[3]) -replace " ", "" ) -split ";" | where { -not [string]::IsNullOrWhiteSpace($_) }
+        $fwrule.$($Name[3]) = $Ports
+
+        if ( Verify-Port($ports) ) {
+            Write-Host "`t`t Ports format are ALL OK!" -ForegroundColor Green
+            Write-Host
+        }
+        else{
+            $RulePortsOK = $false
+            Start-Sleep 1
+            Write-Host
+        }
+
+        ## if any of them is false, set $dataALLOK to false
+        if ( !($RuleNameOK -and $RuleSrcIPOK -and $RuleDstIPOK -and $RulePortsOK) ) {
+            $dataAllOK = $false
+        }
+
+        $_fwRules += $fwrule
+    }
+
+    ## if duplicated firewall rule name found
+    $duplicatedRuleName = $InputFWRule | Group-Object $($Name[0]) | where {$_.count -ge 2}
+
+    if($duplicatedRuleName){
+        Write-Host "`nDuplicated Rule Name found in the input csv file: " -ForegroundColor red -BackgroundColor Yellow
+        $duplicatedRuleName.Group | ft -Property $Property | Out-String | Write-Host
+        $dataAllOK = $false
+        Start-Sleep 1
+    }
+    else{
+        Write-Host "`n`tNo Duplicated rule name found in the input csv file!" -ForegroundColor  Green
+    }
+
+    if($dataAllOK){
+        return $_fwRules
+    }
+    else{
+        return $dataAllOK
+    }
+
+}
+
+
+Function Get-ExceptionResponse{
+    param (
+        [Parameter(ValueFromPipeline = $true, Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        $errorResponse
+    )
+    $readResponse = New-Object System.IO.StreamReader($errorResponse.Exception.Response.GetResponseStream())
+    $body = $readResponse.ReadToEnd()
+    Return $body
+}
 
