@@ -516,3 +516,61 @@ Function Get-ExceptionResponse{
     Return $body
 }
 
+
+Function Get-NSXTDomain {
+    
+    param (
+        [Parameter(ValueFromPipeline = $true, Mandatory = $true, HelpMessage = "NSX-T Server FQDN or IP ")]
+        [ValidateNotNullOrEmpty()]
+        $nsxtServer,
+        # Parameter help description
+        [Parameter(ValueFromPipeline = $true, Mandatory = $true, HelpMessage  = "NSX-T credential")]
+        [ValidateNotNullOrEmpty()]
+        [ValidateScript( {$_ -is [PSCredential] } )]
+        [PSCredential]$cred
+    )
+
+    $URI = "/domains?include_mark_for_delete_objects=false&page_size=1000&sort_ascending=true"
+    $FullURI = "https://$nsxtServer/policy/api/v1/infra" + $URI
+    $method = "get"
+    $Timeout= 600
+    $username = $cred.GetNetworkCredential().UserName
+    $password = $cred.GetNetworkCredential().Password 
+    $base64Cred = [system.convert]::ToBase64String( [System.Text.Encoding]::UTF8.GetBytes("${username}:${password}") )
+    $headerDictionary = @{"Authorization" = "Basic $base64Cred"}
+
+    ## Use splatting to build up the IRM params
+    $irmSplat = @{
+        "method" = $method
+        "headers" = $headerDictionary
+        "ContentType" = "application/json"
+        "uri" = $FullURI
+        "TimeoutSec" = $Timeout
+    }
+
+    ## skip certificate verification to support self signed certificate
+    ## not supported by PowerShell 5 or lower
+    if($PSVersionTable.PSVersion.Major -ge 6){
+        $irmSplat.add("SkipCertificateCheck", $true)
+    }
+
+    try {
+        $response = invoke-webrequest @irmSplat -ErrorAction:Stop
+    }
+    Catch [System.Net.WebException] {
+        Write-Host "`tError in getting NSX-T Domains" -ForegroundColor Red
+        $response = Get-ExceptionResponse($_)
+        Write-Host $response -ForegroundColor Yellow
+        exit(1)
+    }
+
+    if($response.StatusCode -eq 200) {
+        $response = $response.content | ConvertFrom-Json
+    }
+
+    return $response
+}
+
+$exportFunctionList = ("Select-NSXTServer", "Select-CSV", "Confirm-File", "Verify-IP","Verify-Port","Split-NSXTPorts","Get-NSXTPortCount", "Verify-NSXTFirewallRuleInputData","Get-ExceptionResponse", "Get-ExceptionResponse", "Get-NSXTDomain" )
+
+Export-ModuleMember -Function $exportFunctionList 
