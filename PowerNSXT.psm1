@@ -32,11 +32,12 @@ Function Select-NSXTServer {
     return $inputNSXT
 }
 
-Function Select-CSV {
-    parma(
+Function Select-File {
+    param(
         [Parameter(ValueFromPipeline = $true, HelpMessage = "Enter CSV Path(s)")]
         [string[]]$file_path = $null,
-        [string[]]$titleMesg
+        [string[]]$titleMesg,
+        [string]$Type = "CSV File(s)|*.csv"
     )
 
     Write-Host "A window will prompt up on your primary monitor, asking to select a file" -ForegroundColor Yellow
@@ -47,8 +48,9 @@ Function Select-CSV {
         $Dialog = New-Object System.Windows.Forms.OpenFileDialog
         $Dialog.InitialDirectory  = $current_dir.Path
         $Dialog.Title = $titleMesg
-        $Dialog.Filter  = "CSV File(s)|*.csv"
-        $Dialog.Multiselct = $false
+        #$Dialog.Filter  = "CSV File(s)|*.csv"
+        $Dialog.Filter  = $Type
+        $Dialog.Multiselect = $false
         $Result = $Dialog.ShowDialog( (New-object System.Windows.Forms.Form -Property @{TopMost = $true}) )
 
         if($Result -eq 'OK') {
@@ -371,6 +373,7 @@ Function Get-NSXTPortCount {
     [ValidateNotNullOrEmpty()]
     [ValidateScript( {$_ -is [array] })]
     [array[]]$InputArray
+    )
 
     $port_count = 0
     foreach ($port in $InputArray){
@@ -530,8 +533,9 @@ Function Get-NSXTDomain {
         [PSCredential]$cred
     )
 
+    $baseURL = "https://$nsxtServer/policy/api/v1/infra"
     $URI = "/domains?include_mark_for_delete_objects=false&page_size=1000&sort_ascending=true"
-    $FullURI = "https://$nsxtServer/policy/api/v1/infra" + $URI
+    $FullURI = $baseURL + $URI
     $method = "get"
     $Timeout= 600
     $username = $cred.GetNetworkCredential().UserName
@@ -571,6 +575,299 @@ Function Get-NSXTDomain {
     return $response
 }
 
-$exportFunctionList = ("Select-NSXTServer", "Select-CSV", "Confirm-File", "Verify-IP","Verify-Port","Split-NSXTPorts","Get-NSXTPortCount", "Verify-NSXTFirewallRuleInputData","Get-ExceptionResponse", "Get-ExceptionResponse", "Get-NSXTDomain" )
 
-Export-ModuleMember -Function $exportFunctionList 
+Function Get-NSXTSecurityPolicy {
+
+    param (
+        [Parameter(ValueFromPipeline = $true, Mandatory= $true, HelpMessage = "NSX-T Server FQDN or IP")]
+            [validateNotNullorEmpty()]
+            [string]$nsxtServer,
+        [Parameter(ValueFromPipeline = $false, Mandatory= $true, HelpMessage = "NSX-T credential")]
+            [validateNotNullorEmpty()]
+            [ValidateScript({$_ -is [PSCredential]})]
+            [PSCredential]$cred,
+        # Parameter help description
+        [Parameter(ValueFromPipeline = $false, Mandatory = $false)]
+            [ValidateNotNullorEmpty()]
+            [string]$DomainID = "default",
+        # Parameter help description
+        [Parameter(ValueFromPipeline = $false, Mandatory = $false)]
+            [ValidateNotNullorEmpty()]
+            [ValidateScript({$_ -is [string]})]
+            [string]$ID
+        )
+
+        $baseURL = "https://$nsxtServer/policy/api/v1/infra"
+
+        if( $PSBoundParameters.ContainsKey('ID'){
+            $URI = "/domains/$DomainID/security-policies/$ID"
+        }
+        else{
+            $URI = "/domains/$DomainID/security-policies?include_rule_count=true&sort_ascending=true"
+        }
+
+        $FullURI = $baseURL + $URI
+        $method = "get"
+        $Timeout= 600
+        $username = $cred.GetNetworkCredential().UserName
+        $password = $cred.GetNetworkCredential().Password 
+        $base64Cred = [system.convert]::ToBase64String( [System.Text.Encoding]::UTF8.GetBytes("${username}:${password}") )
+        $headerDictionary = @{"Authorization" = "Basic $base64Cred"}
+
+        ## Use splatting to build up the IRM params
+        $irmSplat = @{
+            "method" = $method
+            "headers" = $headerDictionary
+            "ContentType" = "application/json"
+            "uri" = $FullURI
+            "TimeoutSec" = $Timeout
+        }
+    
+        ## skip certificate verification to support self signed certificate
+        ## not supported by PowerShell 5 or lower
+        if($PSVersionTable.PSVersion.Major -ge 6){
+            $irmSplat.add("SkipCertificateCheck", $true)
+        }
+    
+        try {
+            $response = invoke-webrequest @irmSplat -ErrorAction:Stop
+        }
+        Catch [System.Net.WebException] {
+            Write-Host "`tError in getting NSX-T security policy" -ForegroundColor Red
+            $response = Get-ExceptionResponse($_)
+            Write-Host $response -ForegroundColor Yellow
+            exit(1)
+        }
+    
+        if($response.StatusCode -eq 200) {
+            $response = $response.content | ConvertFrom-Json
+        }
+        
+        ## API call result is different
+        ## To get Muliple security policy needs to use $response.results
+        if ($PSBoundParameters.ContainsKey('ID') ){
+            return $response
+        }
+        else{
+            return $response.results
+        }
+    
+}
+
+
+Function Set-NSXTSecurityPolicy {
+
+    param (
+        [Parameter(ValueFromPipeline = $true, Mandatory= $true, HelpMessage = "NSX-T Server FQDN or IP")]
+            [validateNotNullorEmpty()]
+            [string]$nsxtServer,
+        [Parameter(ValueFromPipeline = $false, Mandatory= $true, HelpMessage = "NSX-T credential")]
+            [validateNotNullorEmpty()]
+            [ValidateScript({$_ -is [PSCredential]})]
+            [PSCredential]$cred,
+        # Parameter help description
+        [Parameter(ValueFromPipeline = $false, Mandatory = $false)]
+            [ValidateNotNullorEmpty()]
+            [string]$DomainID = "default",
+        # Parameter help description
+        [Parameter(ValueFromPipeline = $false, Mandatory = $true)]
+            [ValidateNotNullorEmpty()]
+            [ValidateScript({$_ -is [string]})]
+            [string]$ID,
+        [Parameter(ValueFromPipeline = $false, Mandatory = $true)]
+            [ValidateNotNullorEmpty()]
+            $body
+        )
+
+        $baseURL = "https://$nsxtServer/policy/api/v1/infra"
+        $URI = "/domains/$DomainID/security-policies/$ID"
+        $FullURI = $baseURL + $URI
+        $method = "Put"
+        $Timeout= 600
+        $username = $cred.GetNetworkCredential().UserName
+        $password = $cred.GetNetworkCredential().Password 
+        $base64Cred = [system.convert]::ToBase64String( [System.Text.Encoding]::UTF8.GetBytes("${username}:${password}") )
+        $headerDictionary = @{"Authorization" = "Basic $base64Cred"}
+
+        ## Use splatting to build up the IRM params
+        $irmSplat = @{
+            "method" = $method
+            "headers" = $headerDictionary
+            "ContentType" = "application/json"
+            "uri" = $FullURI
+            "TimeoutSec" = $Timeout
+        }
+        
+        ## skip certificate verification to support self signed certificate
+        ## not supported by PowerShell 5 or lower
+        if($PSVersionTable.PSVersion.Major -ge 6){
+            $irmSplat.add("SkipCertificateCheck", $true)
+        }
+
+        $irmSplat.add('body',$body)
+
+        try {
+            $response = invoke-webrequest @irmSplat -ErrorAction:Stop
+        }
+        Catch [System.Net.WebException] {
+            Write-Host "`tError in setting NSX-T security policy" -ForegroundColor Red
+            $response = Get-ExceptionResponse($_)
+            Write-Host $response -ForegroundColor Yellow
+            exit(1)
+        }
+    
+        if($response.StatusCode -eq 200) {
+            Write-Host "Security policy $ID updated successfully!" -ForegroundColor Green
+            $response = $response.content | ConvertFrom-Json
+        }
+        
+        ## API call result is different
+        ## To get Muliple security policy needs to use $response.results
+        if ($PSBoundParameters.ContainsKey('ID') ){
+            return $response
+        }
+        else{
+            return $response.results
+        }    
+}
+
+
+Function New-NSXTService {
+
+    param (
+        [Parameter(ValueFromPipeline = $false, Mandatory= $true, HelpMessage = "NSX-T Server FQDN or IP")]
+            [validateNotNullorEmpty()]
+            [string]$nsxtServer,
+        [Parameter(ValueFromPipeline = $false, Mandatory= $true, HelpMessage = "NSX-T credential")]
+            [validateNotNullorEmpty()]
+            [ValidateScript({$_ -is [PSCredential]})]
+            [PSCredential]$cred,
+        # Parameter help description
+        [Parameter(ValueFromPipeline = $true, Mandatory = $true)]
+            [ValidateNotNullorEmpty()]
+            [string]$Name,
+        # Parameter help description
+        [Parameter(ValueFromPipelineByPropertyName = $true, Mandatory = $true)]
+            [ValidateNotNullorEmpty()]
+            [string[]]$Ports,
+        [Parameter(ValueFromPipeline = $false, Mandatory = $false)]
+            [switch]$debugging
+        )
+
+        $serviceEntry_List = @()
+        ## NSX-T/v each service entry can only have maximum 15 ports; port range counts as 2
+        [int]$serviceEntry_portNumLimit = 15
+        $tcpPorts = @()
+        $udpPorts = @()
+        $tcpPorts += ($ports | where {$_ -match "^tcp"}) -replace "tcp", ""
+        $udpPorts += ($Ports | where {$_ -match "^udp"}) -replace "udp", ""
+
+        if($tcpPorts){
+            $tcpPorts_count = Get-NSXTPortCount($tcpPorts)
+            if($tcpPorts_count -gt $serviceEntry_portNumLimit) {
+                $tcpPorts = Split-NSXTPorts -InputArray $tcpPorts -SubArraySize $serviceEntry_portNumLimit
+                for($i=1; $i -le $tcpPorts.count; $i++){
+                    $serviceEntry = @{
+                        display_name = $Name + "-TCP-" + $i
+                        resource_type = "L4PortSetServiceEntry"
+                        destination_ports = $tcpPorts[$i-1]
+                        l4_protocol  = "TCP"
+                    }
+                    $serviceEntry_List += $serviceEntry
+                }
+            }
+            else {
+                $serviceEntry = @{
+                    display_name = $Name + "-TCP-1"
+                    resource_type = "L4PortSetServiceEntry"
+                    destination_ports = $tcpPorts
+                    l4_protocol  = "TCP"
+                }
+                $serviceEntry_List += $serviceEntry
+            }
+        }
+
+        if($udpPorts){
+            $udpPorts_count = Get-NSXTPortCount($udpPorts)
+            if($udpPorts_count -gt $serviceEntry_portNumLimit) {
+                $udpPorts = Split-NSXTPorts -InputArray $udpPorts -SubArraySize $serviceEntry_portNumLimit
+                for($i=1; $i -le $udpPorts.count; $i++){
+                    $serviceEntry = @{
+                        display_name = $Name + "-UDP-" + $i
+                        resource_type = "L4PortSetServiceEntry"
+                        destination_ports = $udpPorts[$i-1]
+                        l4_protocol  = "UDP"
+                    }
+                    $serviceEntry_List += $serviceEntry
+                }
+            }
+            else {
+                $serviceEntry = @{
+                    display_name = $Name + "-UDP-1"
+                    resource_type = "L4PortSetServiceEntry"
+                    destination_ports = $udpPorts
+                    l4_protocol  = "UDP"
+                }
+                $serviceEntry_List += $serviceEntry
+            }
+        }
+
+        $body = @{
+            display_name = $Name
+            service_entries = $serviceEntry_List
+        }
+        $body = $body | ConvertTo-Json -Depth 6
+        if($debugging){
+            Write-Host "New service config:"
+            Write-host $body
+        }
+
+        $baseURL = "https://$nsxtServer/policy/api/v1/infra"
+        $URI = "/services/$Name"
+        $FullURI = $baseURL + $URI
+        $method = "patch"
+        $Timeout= 600
+        $username = $cred.GetNetworkCredential().UserName
+        $password = $cred.GetNetworkCredential().Password 
+        $base64Cred = [system.convert]::ToBase64String( [System.Text.Encoding]::UTF8.GetBytes("${username}:${password}") )
+        $headerDictionary = @{"Authorization" = "Basic $base64Cred"}
+
+        ## Use splatting to build up the IRM params
+        $irmSplat = @{
+            "method" = $method
+            "headers" = $headerDictionary
+            "ContentType" = "application/json"
+            "uri" = $FullURI
+            "TimeoutSec" = $Timeout
+        }
+        
+        ## skip certificate verification to support self signed certificate
+        ## not supported by PowerShell 5 or lower
+        if($PSVersionTable.PSVersion.Major -ge 6){
+            $irmSplat.add("SkipCertificateCheck", $true)
+        }
+
+        $irmSplat.add('body',$body)
+
+        try {
+            $response = invoke-webrequest @irmSplat -ErrorAction:Stop
+        }
+        Catch [System.Net.WebException] {
+            Write-Host "`tError in creating NSX-T service" -ForegroundColor Red
+            $response = Get-ExceptionResponse($_)
+            Write-Host $response -ForegroundColor Yellow
+            exit
+        }
+    
+        if($response.StatusCode -eq 200) {
+            Write-Host "`tSuccessfully created new NSX-T Service $Name!" -ForegroundColor Green
+            $response = $response.content | ConvertFrom-Json
+        }
+
+        return $response
+}
+
+
+
+# $exportFunctionList = 'Select-NSXTServer', 'Select-File', 'Confirm-File', 'Verify-IP', 'Verify-Port', 'Split-NSXTPorts', 'Get-NSXTPortCount', 'Verify-NSXTFirewallRuleInputData', 'Get-ExceptionResponse', 'Get-ExceptionResponse', 'Get-NSXTDomain'
+# Export-ModuleMember -Function $exportFunctionList 
