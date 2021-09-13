@@ -599,7 +599,7 @@ Function Get-NSXTSecurityPolicy {
 
         $baseURL = "https://$nsxtServer/policy/api/v1/infra"
 
-        if( $PSBoundParameters.ContainsKey('ID'){
+        if( $PSBoundParameters.ContainsKey('ID')){
             $URI = "/domains/$DomainID/security-policies/$ID"
         }
         else{
@@ -731,6 +731,79 @@ Function Set-NSXTSecurityPolicy {
         }    
 }
 
+Function Get-NSXTService {
+
+    param (
+        [Parameter(ValueFromPipeline = $true, Mandatory= $true, HelpMessage = "NSX-T Server FQDN or IP")]
+            [validateNotNullorEmpty()]
+            [string]$nsxtServer,
+        [Parameter(ValueFromPipeline = $false, Mandatory= $true, HelpMessage = "NSX-T credential")]
+            [validateNotNullorEmpty()]
+            [ValidateScript({$_ -is [PSCredential]})]
+            [PSCredential]$cred,
+        # Parameter help description
+        [Parameter(ValueFromPipeline = $false, Mandatory = $false)]
+            [ValidateNotNullorEmpty()]
+            [ValidateScript({$_ -is [string]})]
+            [string]$ID
+        )
+
+        $baseURL = "https://$nsxtServer/policy/api/v1/infra"
+
+        if( $PSBoundParameters.ContainsKey('ID')){
+            $URI = "/services/$ID"
+        }
+        else{
+            $URI = "/services?sort_ascending=true"
+        }
+
+        $FullURI = $baseURL + $URI
+        $method = "get"
+        $Timeout= 600
+        $username = $cred.GetNetworkCredential().UserName
+        $password = $cred.GetNetworkCredential().Password 
+        $base64Cred = [system.convert]::ToBase64String( [System.Text.Encoding]::UTF8.GetBytes("${username}:${password}") )
+        $headerDictionary = @{"Authorization" = "Basic $base64Cred"}
+
+        ## Use splatting to build up the IRM params
+        $irmSplat = @{
+            "method" = $method
+            "headers" = $headerDictionary
+            "ContentType" = "application/json"
+            "uri" = $FullURI
+            "TimeoutSec" = $Timeout
+        }
+    
+        ## skip certificate verification to support self signed certificate
+        ## not supported by PowerShell 5 or lower
+        if($PSVersionTable.PSVersion.Major -ge 6){
+            $irmSplat.add("SkipCertificateCheck", $true)
+        }
+    
+        try {
+            $response = invoke-webrequest @irmSplat -ErrorAction:Stop
+        }
+        Catch [System.Net.WebException] {
+            Write-Host "`tError in getting NSX-T service" -ForegroundColor Red
+            $response = Get-ExceptionResponse($_)
+            Write-Host $response -ForegroundColor Yellow
+            exit(1)
+        }
+    
+        if($response.StatusCode -eq 200) {
+            $response = $response.content | ConvertFrom-Json
+        }
+        
+        ## API call result is different
+        ## To get Muliple services needs to use $response.results
+        if ($PSBoundParameters.ContainsKey('ID') ){
+            return $response
+        }
+        else{
+            return $response.results
+        }
+    
+}
 
 Function New-NSXTService {
 
@@ -868,6 +941,374 @@ Function New-NSXTService {
 }
 
 
+Function Set-NSXTService {
 
+    param(
+    [Parameter (ValueFromPipeline = $true, Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        $ID,
+    [Parameter (ValueFromPipeline = $true, Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        $Ports,
+    [Parameter (ValueFromPipeline = $true, Mandatory=$true, HelpMessage = "NSXT server FQDN or IP")]
+        [ValidateNotNullOrEmpty()]
+        $nsxtServer,
+    [Parameter (ValueFromPipeline = $false, Mandatory=$true, HelpMessage = "NSX-T credential")]
+        [ValidateNotNullOrEmpty()]
+        [ValidateScript( {$_ -is [PSCredential]} )]
+        [PSCredential]$cred,
+    [Parameter (ValueFromPipeline= $false, Mandatory= $false)]
+        [switch]$debugging
+    )
+    
+    $Service = Get-NSXTService -ID $ID -NsxTServer $nsxtServer -cred $cred
+    
+    if(!($Service)){
+        Write-Host "Service ID $ID not found" -ForegroundColor Red
+        exit
+    }
+    
+    $Name = $ID
+    
+    $serviceEntry_List = @()
+    
+    # NSX-T one service entry can only have maximum 15 individual port
+    [int]$serviceEntry_portNumLimit = 15
+    $tcpPorts =@()
+    $udpPorts = @()
+    $tcpPorts += ($ports | where {$_ -match "^tcp"}) -replace "tcp", ""
+    $udpPorts += ($Ports | where {$_ -match "^udp"}) -replace "udp", ""
+    
+    if($tcpPorts){
+        $tcpPorts_count = Get-NSXTPortCount($tcpPorts)
+        if($tcpPorts_count -gt $serviceEntry_portNumLimit) {
+            $tcpPorts = Split-NSXTPorts -InputArray $tcpPorts -SubArraySize $serviceEntry_portNumLimit
+            for($i=1; $i -le $tcpPorts.count; $i++){
+                $serviceEntry = @{
+                    display_name = $Name + "-TCP-" + $i
+                    resource_type = "L4PortSetServiceEntry"
+                    destination_ports = $tcpPorts[$i-1]
+                    l4_protocol  = "TCP"
+                }
+                $serviceEntry_List += $serviceEntry
+            }
+        }
+        else {
+            $serviceEntry = @{
+                display_name = $Name + "-TCP-1"
+                resource_type = "L4PortSetServiceEntry"
+                destination_ports = $tcpPorts
+                l4_protocol  = "TCP"
+            }
+            $serviceEntry_List += $serviceEntry
+        }
+    }
+
+    if($udpPorts){
+        $udpPorts_count = Get-NSXTPortCount($udpPorts)
+        if($udpPorts_count -gt $serviceEntry_portNumLimit) {
+            $udpPorts = Split-NSXTPorts -InputArray $udpPorts -SubArraySize $serviceEntry_portNumLimit
+            for($i=1; $i -le $udpPorts.count; $i++){
+                $serviceEntry = @{
+                    display_name = $Name + "-UDP-" + $i
+                    resource_type = "L4PortSetServiceEntry"
+                    destination_ports = $udpPorts[$i-1]
+                    l4_protocol  = "UDP"
+                }
+                $serviceEntry_List += $serviceEntry
+            }
+        }
+        else {
+            $serviceEntry = @{
+                display_name = $Name + "-UDP-1"
+                resource_type = "L4PortSetServiceEntry"
+                destination_ports = $udpPorts
+                l4_protocol  = "UDP"
+            }
+            $serviceEntry_List += $serviceEntry
+        }
+    }
+    $oldServiceEntry_Count = $Service.service_entries.count
+    $newServiceEntry_Count = $serviceEntry_List.Count
+    
+    ## if new service entry count equal or larger than old service entry count
+    ## update all old service entry
+    ## then add the extra service entry if any
+    
+    if($newServiceEntry_Count -ge $oldServiceEntry_Count) {
+        ## Update old service entries
+        for($i=0; $i -lt $oldServiceEntry_Count; $i++){
+            $Service.service_entries[$i].display_name = $serviceEntry_List[$i].display_name
+            $Service.service_entries[$i].l4_protocol = $serviceEntry_List[$i].l4_protocol
+            $Service.service_entries[$i].resource_type = $serviceEntry_List[$i].resource_type
+            $Service.service_entries[$i].destination_ports = $serviceEntry_List[$i].destination_ports
+        }
+        
+        ## if new service entry count is higher than old, add extra entry to old service, from 
+        if ($newServiceEntry_Count -gt $oldServiceEntry_Count) {
+            foreach ($entry in $serviceEntry_List[$oldServiceEntry_Count..$($newServiceEntry_Count - 1)]) {
+                $Service.service_entries += $entry
+            }
+        }
+    }
+    
+    ## if new service entry count less than old service entry count 
+    ## update the old service's corresponding entries; and remove extra ones
+    if($newServiceEntry_Count -lt $oldServiceEntry_Count) {
+        $tempServiceEntry_List = @()
+        for($i=0; $i -lt $newServiceEntry_Count; $i++){
+            $Service.service_entries[$i].display_name = $serviceEntry_List[$i].display_name
+            $Service.service_entries[$i].l4_protocol = $serviceEntry_List[$i].l4_protocol
+            $Service.service_entries[$i].resource_type = $serviceEntry_List[$i].resource_type
+            $Service.service_entries[$i].destination_ports = $serviceEntry_List[$i].destination_ports
+            $tempServiceEntry_List += $Service.service_entries[$i]
+        }
+        #remove extra entries
+        $Service.service_entries= $tempServiceEntry_List
+    }
+    
+    
+    $baseURL = "https://$nsxtServer/policy/api/v1/infra"
+    $URI = "/services/$ID"
+    $FullURI = $baseURL + $URI
+    $method = "patch"
+    $Timeout= 600
+    $username = $cred.GetNetworkCredential().UserName
+    $password = $cred.GetNetworkCredential().Password 
+    $base64Cred = [system.convert]::ToBase64String( [System.Text.Encoding]::UTF8.GetBytes("${username}:${password}") )
+    $headerDictionary = @{"Authorization" = "Basic $base64Cred"}
+
+    ## Use splatting to build up the IRM params
+    $irmSplat = @{
+        "method" = $method
+        "headers" = $headerDictionary
+        "ContentType" = "application/json"
+        "uri" = $FullURI
+        "TimeoutSec" = $Timeout
+    }
+    
+    ## skip certificate verification to support self signed certificate
+    ## not supported by PowerShell 5 or lower
+    if($PSVersionTable.PSVersion.Major -ge 6){
+        $irmSplat.add("SkipCertificateCheck", $true)
+    }
+
+    $body = $Service | ConvertTo-Json -Depth 6
+    $irmSplat.add('body',$body)
+    if($debugging){
+        Write-Host "New service config:"
+        Write-Host $body
+    }
+
+    try {
+        $response = invoke-webrequest @irmSplat -ErrorAction:Stop
+    }
+    Catch [System.Net.WebException] {
+        Write-Host "`tError in updating NSX-T service" -ForegroundColor Red
+        $response = Get-ExceptionResponse($_)
+        Write-Host $response -ForegroundColor Yellow
+        exit
+    }
+
+    if($response.StatusCode -eq 200) {
+        Write-Host "`tSuccessfully updated new NSX-T Service $Name!" -ForegroundColor Green
+        $response = $response.content | ConvertFrom-Json
+    }
+
+    return $response
+}
+
+
+Function Remove-NSXTService {
+
+    param(
+        [Parameter (ValueFromPipeline = $true, Mandatory=$true, ParameterSetName = 'ID')]
+            [ValidateNotNullOrEmpty()]
+            $ID,
+        [Parameter (ValueFromPipeline = $true, Mandatory=$true, ParameterSetName = 'Name')]
+            [ValidateNotNullOrEmpty()]
+            $Name,
+        [Parameter (ValueFromPipeline = $true, Mandatory=$true, HelpMessage = "NSXT server FQDN or IP")]
+            [ValidateNotNullOrEmpty()]
+            $nsxtServer,
+        [Parameter (ValueFromPipeline = $false, Mandatory=$true, HelpMessage = "NSX-T credential")]
+            [ValidateNotNullOrEmpty()]
+            [ValidateScript( {$_ -is [PSCredential]} )]
+            [PSCredential]$cred
+    )
+    
+    If ($PSBoundParameters.ContainsKey('ID')) {
+        $Service = Get-NSXTService -ID $ID -NsxTServer $nsxtServer -cred $cred
+        if(!($Service)){
+            Write-Host "Service ID $ID not found" -ForegroundColor Red
+            exit
+        }
+    }
+    
+    ## Normally, service should not have duplicated display name
+    If ($PSBoundParameters.ContainsKey('Name')) {
+        $Service = Get-NSXTService | where {$_.display_name -like $Name}
+        if(!($Service)){
+            Write-Host "Service $Name not found" -ForegroundColor Red
+            exit
+        }
+    }    
+    
+    $baseURL = "https://$nsxtServer/policy/api/v1/infra"
+    $URI = "/services/$($Service.ID)"
+    $FullURI = $baseURL + $URI
+    $method = "DELETE"
+    $Timeout= 600
+    $username = $cred.GetNetworkCredential().UserName
+    $password = $cred.GetNetworkCredential().Password 
+    $base64Cred = [system.convert]::ToBase64String( [System.Text.Encoding]::UTF8.GetBytes("${username}:${password}") )
+    $headerDictionary = @{"Authorization" = "Basic $base64Cred"}
+
+    ## Use splatting to build up the IRM params
+    $irmSplat = @{
+        "method" = $method
+        "headers" = $headerDictionary
+        "ContentType" = "application/json"
+        "uri" = $FullURI
+        "TimeoutSec" = $Timeout
+    }
+    
+    ## skip certificate verification to support self signed certificate
+    ## not supported by PowerShell 5 or lower
+    if($PSVersionTable.PSVersion.Major -ge 6){
+        $irmSplat.add("SkipCertificateCheck", $true)
+    }
+
+
+    try {
+        $response = invoke-webrequest @irmSplat -ErrorAction:Stop
+    }
+    Catch [System.Net.WebException] {
+        Write-Host "`tError in deleting NSX-T service $($Service.ID)" -ForegroundColor Red
+        $response = Get-ExceptionResponse($_)
+        Write-Host $response -ForegroundColor Yellow
+        Return $false
+        exit
+    }
+
+    if($response.StatusCode -eq 200) {
+        Write-Host "`tSuccessfully deleted new NSX-T Service $($Service.ID)" -ForegroundColor Green
+        return $true
+    }
+}
+
+Function New-NSXTFWRuleBODY {
+
+    param(
+        # Parameter help description
+        [Parameter (ValueFromPipeline = $true, Mandatory=$true)]
+            [ValidateNotNullOrEmpty()]
+            $Name,
+        [Parameter (ValueFromPipeline = $false, Mandatory=$true)]
+            [ValidateNotNullOrEmpty()]
+            [string[]]$SrcIP, 
+        [Parameter (ValueFromPipeline = $false, Mandatory=$true)]
+            [ValidateNotNullOrEmpty()]
+            [string[]]$DstIP, 
+        [Parameter (ValueFromPipeline = $false, Mandatory=$false)]
+            [ValidateNotNullOrEmpty()]
+            [sting[]]$port,
+        [Parameter (ValueFromPipeline = $false, Mandatory=$false)]
+            [string]$notes="",
+        [Parameter (ValueFromPipeline = $false, Mandatory=$false)]
+            [ValidateNotNullOrEmpty()]
+            [string[]]$svc,
+        [Parameter (ValueFromPipeline= $false, Mandatory=$false)]
+            [ValidateNotNullOrEmpty()]
+            [ValidateScript( {$_ -is [int]} )]
+            [int]$SequenceNumber=0
+    )
+    
+    $_rule_body = get-content $PSscriptRoot\nsxt_fwrule_template.json | ConvertFrom-Json
+    $_rule_body.id = $Name
+    $_rule_body.display_name = $Name
+    $_rule_body.sequence_number = $SequenceNumber
+    $_rule_body.source_groups += $SrcIP
+    $_rule_body.destination_groups += $DstIP
+    $_rule_body.notes = $notes
+    $_rule_body.services += $svc
+
+    return $_rule_body
+}
+
+Function Get-NSXTFirewallRule {
+    # Parameter help description
+    param(
+        [Parameter (ValueFromPipeline = $true, Mandatory=$true, HelpMessage = "NSXT server FQDN or IP")]
+            [ValidateNotNullOrEmpty()]
+            $nsxtServer,
+        [Parameter (ValueFromPipeline = $false, Mandatory=$true, HelpMessage = "NSX-T credential")]
+            [ValidateNotNullOrEmpty()]
+            [ValidateScript( {$_ -is [PSCredential]} )]
+            [PSCredential]$cred,
+        [Parameter (ValueFromPipeline = $false, Mandatory=$false)]
+            [ValidateNotNullOrEmpty()]
+            $DomainID = "default",
+        [Parameter (ValueFromPipeline = $false, Mandatory=$false)]
+            [ValidateNotNullOrEmpty()]
+            $SecurityPolicyID,
+        [Parameter (ValueFromPipeline = $false, Mandatory=$false, ParameterSetName = 'RuleID')]
+            [ValidateNotNullOrEmpty()]
+            $RuleID,
+        [Parameter (ValueFromPipeline = $false, Mandatory=$false, ParameterSetName = 'RuleName')]
+            [ValidateNotNullOrEmpty()]
+            $RuleName
+    )
+    $FWRules = @()
+
+    if ( $PSBoundParameters.containsKey('SecurityPolicyID')) {
+        $FWRules += (Get-NSXTSecurityPolicy -nsxtServer $nsxtServer -cred $cred -ID $SecurityPolicyID).rules
+    }else {
+        ## retrive all security policy list and the get rules from each policy
+        $securityPolices = Get-NSXTSecurityPolicy -nsxtServer $nsxtServer -cred $cred 
+        foreach ($securityPolicy in $securityPolices){
+            $FWRules += (Get-NSXTSecurityPolicy -nsxtServer $nsxtServer -cred $cred -ID $securityPolicy.ID ).rules
+        }
+    }
+
+    if($PSBoundParameters.ContainsKey('RuleID')){
+        $FWRules = $FWRules | where {$_.ID -like $RuleID}
+        if($FWRules){
+            return $FWRules
+        }
+        else{
+            Write-Host "`tNo NSX-T Firewall rules with ID $RuleID Found" -ForegroundColor Red
+            return $false
+        }
+    }
+
+    if($PSBoundParameters.ContainsKey('RuleName')){
+        $FWRules = $FWRules | where {$_.display_name -like $RuleName}
+        if($FWRules){
+            return $FWRules
+        }
+        else{
+            Write-Host "`tNo NSX-T Firewall rules with name $RuleName Found" -ForegroundColor Red
+            return $false
+        }
+    }
+
+
+}
+    
+
+Function Set-logfile {
+    # Get Time Stamp
+    $global:timestamp= Get-Date -format "yyyy-MM-dd_HH_mm"
+    # Set Path Values
+    $LogPath = "$PSscriptRoot\logs"
+    If (!(test-path $LogPath)) {
+        mkdir $LogPath | out-null
+    }
+    
+    $logfile = (Get-Item $PSCommandPath).BaseName + "_" + $global:timestamp + ".log"
+
+    return "$LogPath\$logfile"
+}
 # $exportFunctionList = 'Select-NSXTServer', 'Select-File', 'Confirm-File', 'Verify-IP', 'Verify-Port', 'Split-NSXTPorts', 'Get-NSXTPortCount', 'Verify-NSXTFirewallRuleInputData', 'Get-ExceptionResponse', 'Get-ExceptionResponse', 'Get-NSXTDomain'
 # Export-ModuleMember -Function $exportFunctionList 
