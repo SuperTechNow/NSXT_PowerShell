@@ -37,8 +37,15 @@ Function Select-File {
         [Parameter(ValueFromPipeline = $true, HelpMessage = "Enter CSV Path(s)")]
         [string[]]$file_path = $null,
         [string[]]$titleMesg,
-        [string]$Type = "CSV File(s)|*.csv"
+        [string]$Type 
     )
+
+    if( $PSBoundParameters.ContainsKey('Type') ){
+        $filter = "$Type File(s)|*.$Type"
+    }
+    else{
+        $filter = "CSV File(s)|*.csv"
+    }
 
     Write-Host "A window will prompt up on your primary monitor, asking to select a file" -ForegroundColor Yellow
     
@@ -49,7 +56,7 @@ Function Select-File {
         $Dialog.InitialDirectory  = $current_dir.Path
         $Dialog.Title = $titleMesg
         #$Dialog.Filter  = "CSV File(s)|*.csv"
-        $Dialog.Filter  = $Type
+        $Dialog.Filter  = $filter
         $Dialog.Multiselect = $false
         $Result = $Dialog.ShowDialog( (New-object System.Windows.Forms.Form -Property @{TopMost = $true}) )
 
