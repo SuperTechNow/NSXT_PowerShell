@@ -1,0 +1,26 @@
+{
+    "action": "ALLOW",
+    "resource_type": "Rule",
+    "id": "",
+    "display_name": "",
+    "sequence_number": 0,
+    "sources_excluded": false,
+    "destinations_excluded": false,
+    "source_groups": [],
+    "destination_groups": [],
+    "services": [],
+    "service_entries": [],
+    "profiles": [
+        "ANY"
+    ],
+    "logged": true,
+    "scope" : [
+        "ANY"
+    ],
+    "disabled": false,
+    "notes": "",
+    "direction": "IN_OUT",
+    "tag": "",
+    "ip_protocol": "IPV4_IPV6",
+    "is_default": false
+}

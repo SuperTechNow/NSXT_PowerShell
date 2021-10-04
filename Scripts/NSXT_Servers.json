@@ -1,0 +1,37 @@
+[
+    {
+        "LOC": "Toronto",
+        "ENV" : "DEV",
+        "NSXT": "FQDN of NSX-T Server"
+    },
+    
+    {
+        "LOC": "Toronto",
+        "ENV": "PAT",
+        "NSXT": "FQDN of NSX-T Server"
+    },
+    
+    {
+        "LOC":"Toronto",
+        "ENV" : "PRD",
+        "NSXT": "FQDN of NSX-T Server"
+    },
+
+    {
+        "LOC":"NY",
+        "ENV": "DEV",
+        "NSXT": "FQDN of NSX-T Server"
+    },
+    
+    {
+        "LOC":"NY",
+        "ENV": "PAT",
+        "NSXT": "FQDN of NSX-T Server"
+    },
+    
+    {
+        "LOC":"NY",
+        "ENV": "PRD",
+        "NSXT": "FQDN of NSX-T Server"
+    }
+]
