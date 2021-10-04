@@ -10,3 +10,5 @@ I've always wanted to do something for NSX-T. So here we are.
 This repo is to create a similar module for NSX-T using NSX-T policy API.
 
 I will start with creating some functions for NSX-T Firewall rule creation first. 
+
+# Functions for firewall rule creation
