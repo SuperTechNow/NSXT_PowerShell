@@ -78,29 +78,32 @@ $Name_prefix  = "PA-"
 
 ## select nsx-t server and enter credential
 $nsxt = select-nsxtServer
-if (!($nsxtcred)){
-    $nsxtcred = Get-Credential -Message "Please enter NSX-T Administrative Credentials: "
-}
 
-## Check domain and get domain ID: default
-Write-Host "Retriving NSX-T Infrastructure Domain information"
-$NSXTDomains = Get-NSXTDomain -NsxTServer $nsxt -cred $nsxtCred
-switch ($NSXTDomains.result_count) {
-    ($null) {
-        write-host "`nSomething wrong. Please fix it and re-run the script" -foregroundcolor red -BackgroundColor yellow
-        exit
-    }
-    (0) {
-            write-host "`nCan't find any NSXT Infrastruture Domain" -foregroundcolor red -BackgroundColor yellow;
+$nsxtcred = $null
+While (!($nsxtcred)){
+    $nsxtcred = Get-Credential -Message "Please enter NSX-T Administrative Credentials: "
+
+    ## verify credential by Checking domain and getting domain ID: default
+    Write-Host "Verifying credential and Retriving NSX-T Infrastructure Domain information"
+    $NSXTDomains = Get-NSXTDomain -NsxTServer $nsxt -cred $nsxtCred
+    switch ($NSXTDomains.result_count) {
+        ($null) {
+            write-host "`nInvalid user name or password. Please re-enter your credential" -foregroundcolor red -BackgroundColor yellow
+            $nsxtcred = $null
+            start-sleep 2
+        }
+        (0) {
+                write-host "`nValid credential but can't find any NSXT Infrastruture Domain" -foregroundcolor red -BackgroundColor yellow;
+                exit
+        }
+        (1) {
+            Write-host "`nValid credential. 1 NSX-T Infrastructure Domain: $($NSXTDomains.results[0].id) Found" -foregroundcolor green;
+            $DomainID = $NSXTDomains.results[0].id 
+        }
+        default {
+            Write-host "`nValid credential. Found more than one NSX-T Infrastructure Domain. This script doesn't support." -foregroundcolor red -BackgroundColor yellow;
             exit
-    }
-    (1) {
-        Write-host "`nFound 1 NSX-T Infrastructure Domain: $($NSXTDomains.results[0].id)" -foregroundcolor green;
-        $DomainID = $NSXTDomains.results[0].id 
-    }
-    default {
-        Write-host "`nFound more than one NSX-T Infrastructure Domain. This script doesn't support.";
-        exit
+        }
     }
 }
 
@@ -282,7 +285,7 @@ foreach ($section in $sections) {
 }
 
 ## service can only be removed when no rule is using it. 
-## that's why only after rules are updated, and those services are no longer need, we start to remove it
+## that's why only after rules are updated, and those services are no longer needed, we start to remove it
 if ($ServiceRemoveList) {
     Write-host "Start to remove services that are no more needed" -foregroundcolor green
     $removeService_Count = $ServiceRemoveList.count
