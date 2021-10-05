@@ -76,18 +76,18 @@ Confirm-File:
 
 # Script for NSX-T firewall rule creation/update
 Under Scripts folder, there several files:
-1. NSXT-Firewall-Update.ps1
+1. NSXT-Firewall-Update.ps1:
     Main script for FW rule creation/update. The script will take in a csv file with firewall rule data with rule name, source/destination IPs, service ports, security policy name and rule notes, validate all data format, then create necessary service entities for rules, compose firewall rule body, add them to a target security policy. After finishing adding all rules from the csv file to a target security policy, it then push the security policy to NSX-T server. The original security policy configuration will be backed up first. 
 
     So you can update/create hundreds of firewall rules in one security policy through one publishing operation. It avoids massive NSX resync, reduce impact greatly and dramatically increases fw rule creation/update efficiency.
 
-2. Firewall_Rule_Example.csv
+2. Firewall_Rule_Example.csv:
     This is the example of rule input csv file.  The FW rule name should be unique as it will be used as rule ID in NSX-T by default. Service-Now request ticket number is highly recommended to be used as the FW rule name.
     service port should be either single udpxxxxx or tcpxxxxx. or tcpxxxxx-xxxxx|udpxxxxx-xxxxx for port range.
 
-3. NSXT_Servers.json
+3. NSXT_Servers.json:
     Json file for the list of your target NSX-T servers
 
-4. nsxt_fwrule_template.json
+4. nsxt_fwrule_template.json:
     Json file for NSX-T firewall rule template
 
